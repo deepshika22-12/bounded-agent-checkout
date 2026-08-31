@@ -19,7 +19,10 @@ def utcnow():
 
 
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = st.secrets.get(
+    "BACKEND_URL",
+    "http://127.0.0.1:8000",
+)
 
 # Fast, purely local endpoints: catalog, mandate, metrics, audit, trace.
 TIMEOUT_SECONDS = 8

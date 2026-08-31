@@ -1,0 +1,24 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environment and cache
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local runtime/demo data
+audit_log.json
+adversarial_results.json
+validation_results.json
+
+# Streamlit cache
+.streamlit/secrets.toml

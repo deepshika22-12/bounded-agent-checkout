@@ -1,0 +1,792 @@
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Literal, Optional
+import hmac
+import json
+import time
+
+from fastapi import FastAPI, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+import adversarial_tests
+import agent_explainer
+import agent_trace
+import audit_store
+import metrics
+import policy_simulator
+import shopping_planner
+
+from config import (
+    DEFAULT_CURRENCY,
+    MANDATE_OWNER_PASSWORD,
+    RAZORPAY_CONFIGURED,
+    RAZORPAY_KEY_ID,
+)
+
+from razorpay_client import create_test_order
+
+
+app = FastAPI(
+    title="Bounded Agent Checkout",
+    description="A bounded agent checkout system with deterministic mandate enforcement.",
+    version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class Mandate(BaseModel):
+    spending_cap: float
+    allowed_categories: list[str]
+    expiry: datetime
+    status: Literal["active", "paused"] = "active"
+    mandate_version: int = 1
+
+
+class OwnerConfirmationRequest(BaseModel):
+    owner_password: str = Field(..., min_length=1)
+
+
+class MandateStatusResponse(BaseModel):
+    mandate: Mandate
+    message: str
+
+
+class IdempotentOrderResponse(BaseModel):
+    order: dict
+    idempotent_replay: bool
+
+
+class CatalogItem(BaseModel):
+    item_id: str
+    name: str
+    price: float
+    category: str
+    description: str
+    image_url: Optional[str] = None
+    reference_url: Optional[str] = None
+    in_stock: bool = True
+    merchant_name: str = "Bounded Demo Store"
+
+
+class AgentDecision(BaseModel):
+    item_id: str
+    decision: Literal["buy", "block"]
+    reason: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AgentExplanation(BaseModel):
+    item_id: str
+    decision: Literal["buy", "block"]
+    reason: str
+    explanation: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AgentPlanResponse(BaseModel):
+    user_request: str
+    requested_item_id: Optional[str]
+    intent_summary: str
+    selection_reason: str
+    planner_mode: Literal["ollama", "rule_based_fallback"]
+    confidence: float
+    item: Optional[CatalogItem] = None
+    decision: Optional[Literal["buy", "block"]] = None
+    reason: Optional[str] = None
+    explanation: Optional[str] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+CATALOG = [
+    CatalogItem(
+        item_id="ITM001",
+        name="Wireless Mouse",
+        price=799.0,
+        category="electronics",
+        description="Compact wireless mouse for everyday work and study.",
+        image_url="frontend/assets/wireless-mouse.jpeg",
+        reference_url="https://www.amazon.in/s?k=wireless+mouse",
+    ),
+    CatalogItem(
+        item_id="ITM002",
+        name="USB-C Multiport Hub",
+        price=1299.0,
+        category="electronics",
+        description="HDMI, USB-A, and USB-C expansion for a work laptop.",
+        image_url="frontend/assets/usb-c-hub.jpeg",
+        reference_url="https://www.amazon.in/s?k=usb+c+hub",
+    ),
+    CatalogItem(
+        item_id="ITM003",
+        name="Laptop Sleeve, 14-inch",
+        price=699.0,
+        category="electronics",
+        description="Protective laptop sleeve with a soft inner lining.",
+        image_url="frontend/assets/laptop-sleeve.jpeg",
+        reference_url="https://www.flipkart.com/search?q=14+inch+laptop+sleeve",
+    ),
+    CatalogItem(
+        item_id="ITM004",
+        name="Wireless Charging Pad",
+        price=899.0,
+        category="electronics",
+        description="Compact wireless charger for a compatible phone.",
+        image_url="frontend/assets/wireless-charger.jpeg",
+        reference_url="https://www.amazon.in/s?k=wireless+charging+pad",
+    ),
+    CatalogItem(
+        item_id="ITM005",
+        name="Full-HD Webcam",
+        price=1899.0,
+        category="electronics",
+        description="1080p webcam for meetings, classes, and remote work.",
+        image_url="frontend/assets/webcam.jpeg",
+        reference_url="https://www.amazon.in/s?k=1080p+webcam",
+    ),
+    CatalogItem(
+        item_id="ITM006",
+        name="Notebook Set, Pack of 3",
+        price=249.0,
+        category="stationery",
+        description="Three ruled notebooks for notes, sketches, and planning.",
+        image_url="frontend/assets/notebook-set.jpeg",
+        reference_url="https://www.amazon.in/s?k=notebook+set+pack+of+3",
+    ),
+    CatalogItem(
+        item_id="ITM007",
+        name="Gel Pen Set",
+        price=299.0,
+        category="stationery",
+        description="Smooth-writing black and blue gel pens for daily use.",
+        image_url="frontend/assets/gel-pen-set.jpeg",
+        reference_url="https://www.flipkart.com/search?q=gel+pen+set",
+    ),
+    CatalogItem(
+        item_id="ITM008",
+        name="Weekly Desk Planner",
+        price=349.0,
+        category="stationery",
+        description="Undated weekly planner for work priorities and tasks.",
+        image_url="frontend/assets/weekly-planner.jpeg",
+        reference_url="https://www.amazon.in/s?k=weekly+desk+planner",
+    ),
+    CatalogItem(
+        item_id="ITM009",
+        name="LED Desk Lamp",
+        price=599.0,
+        category="lifestyle",
+        description="Adjustable LED desk lamp with warm and cool light modes.",
+        image_url="frontend/assets/desk-lamp.jpeg",
+        reference_url="https://www.amazon.in/s?k=led+desk+lamp",
+    ),
+    CatalogItem(
+        item_id="ITM010",
+        name="Insulated Water Bottle",
+        price=349.0,
+        category="lifestyle",
+        description="Stainless-steel bottle for daily work and travel.",
+        image_url="frontend/assets/water-bottle.jpeg",
+        reference_url="https://www.blinkit.com/s/?q=water+bottle",
+    ),
+    CatalogItem(
+        item_id="ITM011",
+        name="Cable Organizer Set",
+        price=299.0,
+        category="lifestyle",
+        description="Reusable cable ties and clips for a tidy desk.",
+        image_url="frontend/assets/cable-organizer.jpeg",
+        reference_url="https://www.amazon.in/s?k=cable+organizer",
+    ),
+    CatalogItem(
+        item_id="ITM012",
+        name="Ergonomic Mouse Pad",
+        price=449.0,
+        category="lifestyle",
+        description="Wrist-support mouse pad for comfortable desk work.",
+        image_url="frontend/assets/mouse-pad.jpeg",
+        reference_url="https://www.flipkart.com/search?q=ergonomic+mouse+pad",
+    ),
+    CatalogItem(
+        item_id="ITM013",
+        name="Mechanical Keyboard",
+        price=3499.0,
+        category="electronics",
+        description="Price exceeds the current mandate cap.",
+        image_url="frontend/assets/mechanical-keyboard.jpeg",
+        reference_url="https://www.amazon.in/s?k=mechanical+keyboard",
+    ),
+    CatalogItem(
+        item_id="ITM014",
+        name="Portable SSD, 1TB",
+        price=4999.0,
+        category="electronics",
+        description="High-value item that exceeds the current mandate cap.",
+        image_url="frontend/assets/portable-ssd.jpeg",
+        reference_url="https://www.amazon.in/s?k=portable+ssd+1tb",
+    ),
+    CatalogItem(
+        item_id="ITM015",
+        name="Office Chair",
+        price=8999.0,
+        category="furniture",
+        description="Furniture is outside the current mandate.",
+        image_url="frontend/assets/office-chair.jpeg",
+        reference_url="https://www.flipkart.com/search?q=office+chair",
+    ),
+    CatalogItem(
+        item_id="ITM016",
+        name="Smartwatch",
+        price=2299.0,
+        category="wearables",
+        description="Wearables are not an allowed category.",
+        image_url="frontend/assets/smartwatch.jpeg",
+        reference_url="https://www.amazon.in/s?k=smartwatch",
+    ),
+    CatalogItem(
+        item_id="ITM017",
+        name="Bluetooth Headphones",
+        price=2199.0,
+        category="electronics",
+        description="Currently unavailable.",
+        image_url="frontend/assets/bluetooth-headphones.jpeg",
+        reference_url="https://www.amazon.in/s?k=bluetooth+headphones",
+        in_stock=False,
+    ),
+]
+
+
+CURRENT_MANDATE = Mandate(
+    spending_cap=2500.0,
+    allowed_categories=["electronics", "stationery", "lifestyle"],
+    expiry=datetime.utcnow() + timedelta(days=7),
+)
+
+_IDEMPOTENCY_STORE: dict[str, dict] = {}
+
+
+def log_audit(event_type: str, details: dict) -> None:
+    audit_store.append_audit_entry(
+        event_type,
+        {
+            "mandate_version": CURRENT_MANDATE.mandate_version,
+            "mandate_status": CURRENT_MANDATE.status,
+            **details,
+        },
+    )
+
+
+def find_item(item_id: str) -> Optional[CatalogItem]:
+    return next(
+        (item for item in CATALOG if item.item_id == item_id),
+        None,
+    )
+
+
+def verify_owner(owner_password: str, denied_event: str) -> None:
+    valid = bool(MANDATE_OWNER_PASSWORD) and hmac.compare_digest(
+        owner_password,
+        MANDATE_OWNER_PASSWORD,
+    )
+
+    if valid:
+        return
+
+    log_audit(
+        denied_event,
+        {
+            "message": "Owner verification failed. The mandate was not changed.",
+        },
+    )
+
+    raise HTTPException(
+        status_code=401,
+        detail="Owner verification failed. The mandate was not changed.",
+    )
+
+
+def evaluate_mandate(item_id: str) -> AgentDecision:
+    item = find_item(item_id)
+
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No such item: {item_id}",
+        )
+
+    mandate = CURRENT_MANDATE
+
+    if datetime.utcnow() > mandate.expiry:
+        return AgentDecision(
+            item_id=item_id,
+            decision="block",
+            reason=f"Mandate expired at {mandate.expiry.isoformat()}.",
+        )
+
+    if mandate.status == "paused":
+        return AgentDecision(
+            item_id=item_id,
+            decision="block",
+            reason="Agent purchasing is currently paused.",
+        )
+
+    if not item.in_stock:
+        return AgentDecision(
+            item_id=item_id,
+            decision="block",
+            reason=f"'{item.name}' is currently unavailable.",
+        )
+
+    if item.category not in mandate.allowed_categories:
+        return AgentDecision(
+            item_id=item_id,
+            decision="block",
+            reason=f"Category '{item.category}' is not allowed.",
+        )
+
+    if item.price > mandate.spending_cap:
+        return AgentDecision(
+            item_id=item_id,
+            decision="block",
+            reason=(
+                f"Item price INR {item.price:,.2f} exceeds the "
+                f"INR {mandate.spending_cap:,.2f} spending cap."
+            ),
+        )
+
+    return AgentDecision(
+        item_id=item_id,
+        decision="buy",
+        reason=(
+            f"'{item.name}' is in an allowed category and is within "
+            "the spending cap."
+        ),
+    )
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "bounded-agent-checkout",
+    }
+
+
+@app.get("/catalog", response_model=list[CatalogItem])
+def get_catalog():
+    return CATALOG
+
+
+@app.get("/mandate", response_model=Mandate)
+def get_mandate():
+    return CURRENT_MANDATE
+
+
+@app.post("/mandate/pause", response_model=MandateStatusResponse)
+def pause_mandate(request: OwnerConfirmationRequest):
+    verify_owner(request.owner_password, "mandate_pause_denied")
+
+    if CURRENT_MANDATE.status == "paused":
+        return MandateStatusResponse(
+            mandate=CURRENT_MANDATE,
+            message="Mandate is already paused.",
+        )
+
+    previous_status = CURRENT_MANDATE.status
+    previous_version = CURRENT_MANDATE.mandate_version
+
+    CURRENT_MANDATE.status = "paused"
+    CURRENT_MANDATE.mandate_version += 1
+
+    log_audit(
+        "mandate_paused",
+        {
+            "previous_status": previous_status,
+            "new_status": CURRENT_MANDATE.status,
+            "previous_version": previous_version,
+            "new_version": CURRENT_MANDATE.mandate_version,
+        },
+    )
+
+    return MandateStatusResponse(
+        mandate=CURRENT_MANDATE,
+        message="Agent purchasing has been paused.",
+    )
+
+
+@app.post("/mandate/resume", response_model=MandateStatusResponse)
+def resume_mandate(request: OwnerConfirmationRequest):
+    verify_owner(request.owner_password, "mandate_resume_denied")
+
+    if CURRENT_MANDATE.status == "active":
+        return MandateStatusResponse(
+            mandate=CURRENT_MANDATE,
+            message="Mandate is already active.",
+        )
+
+    previous_status = CURRENT_MANDATE.status
+    previous_version = CURRENT_MANDATE.mandate_version
+
+    CURRENT_MANDATE.status = "active"
+    CURRENT_MANDATE.mandate_version += 1
+
+    log_audit(
+        "mandate_resumed",
+        {
+            "previous_status": previous_status,
+            "new_status": CURRENT_MANDATE.status,
+            "previous_version": previous_version,
+            "new_version": CURRENT_MANDATE.mandate_version,
+        },
+    )
+
+    return MandateStatusResponse(
+        mandate=CURRENT_MANDATE,
+        message="Agent purchasing has been resumed.",
+    )
+
+
+@app.post("/agent/decide", response_model=AgentDecision)
+def agent_decide(item_id: str):
+    start = time.perf_counter()
+    decision = evaluate_mandate(item_id)
+    latency_ms = round((time.perf_counter() - start) * 1000, 2)
+
+    log_audit(
+        "agent_decision",
+        {
+            **decision.model_dump(mode="json"),
+            "latency_ms": latency_ms,
+        },
+    )
+
+    return decision
+
+
+@app.post("/agent/explain", response_model=AgentExplanation)
+def agent_explain(item_id: str):
+    item = find_item(item_id)
+
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No such item: {item_id}",
+        )
+
+    start = time.perf_counter()
+    decision = evaluate_mandate(item_id)
+
+    explanation = agent_explainer.generate_explanation(
+        item_name=item.name,
+        price=item.price,
+        category=item.category,
+        decision=decision.decision,
+        reason=decision.reason,
+        mandate=CURRENT_MANDATE.model_dump(mode="json"),
+    )
+
+    latency_ms = round((time.perf_counter() - start) * 1000, 2)
+
+    result = AgentExplanation(
+        item_id=item_id,
+        decision=decision.decision,
+        reason=decision.reason,
+        explanation=explanation,
+    )
+
+    log_audit(
+        "agent_explanation",
+        {
+            **result.model_dump(mode="json"),
+            "latency_ms": latency_ms,
+        },
+    )
+
+    return result
+
+
+@app.post("/agent/plan", response_model=AgentPlanResponse)
+def agent_plan(request: str):
+    log_audit(
+        "planner_request",
+        {"user_request": request},
+    )
+
+    proposal = shopping_planner.plan_purchase(
+        request,
+        [item.model_dump() for item in CATALOG],
+    )
+
+    log_audit("planner_proposal", proposal)
+
+    requested_item_id = proposal.get("requested_item_id")
+
+    if not requested_item_id:
+        return AgentPlanResponse(
+            user_request=request,
+            requested_item_id=None,
+            intent_summary=proposal["intent_summary"],
+            selection_reason=proposal["selection_reason"],
+            planner_mode=proposal["planner_mode"],
+            confidence=proposal["confidence"],
+        )
+
+    item = find_item(requested_item_id)
+
+    if item is None:
+        return AgentPlanResponse(
+            user_request=request,
+            requested_item_id=None,
+            intent_summary=proposal["intent_summary"],
+            selection_reason="The proposed item is not in the catalog.",
+            planner_mode=proposal["planner_mode"],
+            confidence=0.0,
+        )
+
+    start = time.perf_counter()
+    decision = evaluate_mandate(item.item_id)
+
+    explanation = agent_explainer.generate_explanation(
+        item_name=item.name,
+        price=item.price,
+        category=item.category,
+        decision=decision.decision,
+        reason=decision.reason,
+        mandate=CURRENT_MANDATE.model_dump(mode="json"),
+    )
+
+    latency_ms = round((time.perf_counter() - start) * 1000, 2)
+
+    result = AgentPlanResponse(
+        user_request=request,
+        requested_item_id=item.item_id,
+        intent_summary=proposal["intent_summary"],
+        selection_reason=proposal["selection_reason"],
+        planner_mode=proposal["planner_mode"],
+        confidence=proposal["confidence"],
+        item=item,
+        decision=decision.decision,
+        reason=decision.reason,
+        explanation=explanation,
+    )
+
+    log_audit(
+        "policy_decision",
+        {
+            **result.model_dump(mode="json"),
+            "latency_ms": latency_ms,
+        },
+    )
+
+    return result
+
+
+@app.post("/order/create", response_model=IdempotentOrderResponse)
+def create_order(
+    item_id: str,
+    idempotency_key: Optional[str] = Header(
+        None,
+        alias="Idempotency-Key",
+    ),
+):
+    if not idempotency_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Idempotency-Key header is required.",
+        )
+
+    item = find_item(item_id)
+
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No such item: {item_id}",
+        )
+
+    existing = _IDEMPOTENCY_STORE.get(idempotency_key)
+
+    if existing:
+        if existing["item_id"] != item_id:
+            raise HTTPException(
+                status_code=409,
+                detail="This idempotency key was used for another item.",
+            )
+
+        log_audit(
+            "order_replay_returned",
+            {
+                "item_id": item_id,
+                "idempotency_key": idempotency_key,
+            },
+        )
+
+        return IdempotentOrderResponse(
+            order=existing["order"],
+            idempotent_replay=True,
+        )
+
+    decision = evaluate_mandate(item_id)
+
+    if decision.decision == "block":
+        log_audit(
+            "order_blocked",
+            {
+                "item_id": item_id,
+                "reason": decision.reason,
+            },
+        )
+
+        raise HTTPException(
+            status_code=403,
+            detail=f"Order blocked by mandate: {decision.reason}",
+        )
+
+    order = create_test_order(
+        amount=int(item.price * 100),
+        currency=DEFAULT_CURRENCY,
+        receipt_id=f"receipt_{item_id}_{int(time.time())}",
+    )
+
+    _IDEMPOTENCY_STORE[idempotency_key] = {
+        "item_id": item_id,
+        "order": order,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    log_audit(
+        "order_created",
+        {
+            "item_id": item_id,
+            "order": order,
+        },
+    )
+
+    return IdempotentOrderResponse(
+        order=order,
+        idempotent_replay=False,
+    )
+
+
+@app.get("/audit")
+def get_audit():
+    return audit_store.get_all_audit_entries()
+
+
+@app.get("/agent/trace")
+def get_agent_trace(limit: Optional[int] = None):
+    events = audit_store.get_all_audit_entries()
+
+    if limit is not None:
+        if limit < 1:
+            raise HTTPException(
+                status_code=400,
+                detail="limit must be a positive integer.",
+            )
+
+        events = events[-limit:]
+
+    return agent_trace.build_trace(events)
+
+
+@app.get("/metrics")
+def get_metrics():
+    return metrics.calculate_metrics(
+        audit_store.get_all_audit_entries()
+    )
+
+
+@app.get("/metrics/policy")
+def get_policy_metrics():
+    return policy_simulator.validate_policy_accuracy(
+        audit_store.get_all_audit_entries(),
+        [item.model_dump() for item in CATALOG],
+        CURRENT_MANDATE.model_dump(mode="json"),
+    )
+
+
+@app.get("/metrics/adversarial")
+def get_adversarial_metrics():
+    return adversarial_tests.get_adversarial_stats()
+
+
+@app.get("/validation/results")
+def get_validation_results():
+    results_path = (
+        Path(__file__).resolve().parent
+        / "validation_results.json"
+    )
+
+    if not results_path.exists():
+        return {
+            "available": False,
+            "message": (
+                "No validation results yet. Run "
+                "`python run_validation_suite.py`."
+            ),
+        }
+
+    try:
+        with results_path.open("r", encoding="utf-8") as file:
+            results = json.load(file)
+
+        results["available"] = True
+        return results
+
+    except json.JSONDecodeError:
+        return {
+            "available": False,
+            "message": "validation_results.json is invalid.",
+        }
+
+
+@app.get("/config/status")
+def config_status():
+    return {
+        "razorpay_configured": RAZORPAY_CONFIGURED,
+        "owner_confirmation_configured": bool(
+            MANDATE_OWNER_PASSWORD
+        ),
+        "key_id_prefix": (
+            RAZORPAY_KEY_ID[:12] + "..."
+            if RAZORPAY_CONFIGURED
+            else None
+        ),
+        "hint": (
+            "Real test keys detected."
+            if RAZORPAY_CONFIGURED
+            else "Razorpay test keys are not configured."
+        ),
+    }
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "Bounded Agent Checkout is running.",
+        "endpoints": [
+            "/health",
+            "/catalog",
+            "/mandate",
+            "/mandate/pause",
+            "/mandate/resume",
+            "/agent/decide",
+            "/agent/explain",
+            "/agent/plan",
+            "/order/create",
+            "/audit",
+            "/agent/trace",
+            "/metrics",
+            "/metrics/policy",
+            "/metrics/adversarial",
+            "/validation/results",
+            "/config/status",
+            "/docs",
+        ],
+    }

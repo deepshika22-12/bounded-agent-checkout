@@ -1,0 +1,1328 @@
+from datetime import datetime
+from html import escape
+from pathlib import Path
+from PIL import Image, ImageOps
+from urllib.parse import quote
+import uuid
+import csv
+import json
+import io
+
+import requests
+import streamlit as st
+from requests.exceptions import ConnectionError, Timeout
+
+
+def utcnow():
+    from datetime import datetime as _dt, timezone as _tz
+    return _dt.now(_tz.utc).replace(tzinfo=None)
+
+
+
+BASE_URL = "http://127.0.0.1:8000"
+TIMEOUT_SECONDS = 5
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+st.set_page_config(
+    page_title="Bounded Agent Checkout",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    :root {
+        --blue: #2563EB;
+        --blue-dark: #1D4ED8;
+        --cream: #F9F7F2;
+        --card: #FFFFFF;
+        --border: #E7E5E4;
+        --text: #1C1917;
+        --muted: #78716C;
+        --green: #15803D;
+        --green-soft: #DCFCE7;
+        --red: #B91C1C;
+        --red-soft: #FEE2E2;
+        --amber: #B45309;
+        --amber-soft: #FEF3C7;
+        --purple-soft: #F3E8FF;
+        --purple-text: #6B21A8;
+    }
+
+    #MainMenu,
+    footer,
+    header {
+        visibility: hidden;
+    }
+
+    .stApp,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"] {
+        background-color: var(--cream) !important;
+    }
+
+    html,
+    body,
+    [class*="css"] {
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: var(--text);
+    }
+
+    .block-container {
+        max-width: 1240px;
+        padding-top: 1.75rem;
+        padding-bottom: 2.5rem;
+    }
+
+    div[data-testid="stMarkdownContainer"] p {
+        color: var(--muted);
+    }
+
+    div.stButton > button {
+        min-height: 44px;
+        width: 100%;
+        border: 0;
+        border-radius: 10px;
+        background: var(--blue);
+        color: #FFFFFF;
+        font-weight: 600;
+        transition: background 0.15s ease, transform 0.15s ease;
+    }
+
+    div.stButton > button:hover {
+        background: var(--blue-dark);
+        color: #FFFFFF;
+        transform: translateY(-1px);
+    }
+
+    div[data-testid="stMetric"] {
+        min-height: 122px;
+        padding: 1rem 1.1rem;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--card);
+        box-shadow: 0 2px 8px rgba(41, 37, 36, 0.05);
+    }
+
+    div[data-testid="stMetricLabel"] {
+        color: var(--muted);
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    div[data-testid="stMetricValue"] {
+        color: var(--text);
+        font-weight: 700;
+    }
+
+    div[data-baseweb="tab-list"] {
+        gap: 0.35rem;
+        padding: 0.35rem;
+        border-radius: 12px;
+        background: #F1EFEC;
+    }
+
+    button[data-baseweb="tab"] {
+        height: 42px;
+        padding: 0 1rem;
+        border-radius: 9px;
+        color: var(--muted);
+        font-weight: 600;
+    }
+
+    button[data-baseweb="tab"][aria-selected="true"] {
+        background: #FFFFFF;
+        color: var(--blue);
+        box-shadow: 0 1px 4px rgba(41, 37, 36, 0.1);
+    }
+
+    .page-hero {
+        padding: 0.9rem 0 1.55rem;
+    }
+
+    .page-hero h1 {
+        margin: 0;
+        color: var(--text);
+        font-size: clamp(1.8rem, 3vw, 2.45rem);
+        font-weight: 700;
+        letter-spacing: -0.04em;
+    }
+
+    .page-hero p {
+        margin: 0.5rem 0 0;
+        color: var(--muted);
+        font-size: 1rem;
+    }
+
+    .section-title {
+        margin: 1.8rem 0 0.25rem;
+        color: var(--text);
+        font-size: 1.25rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+    }
+
+    .section-copy {
+        margin: 0 0 1rem;
+        color: var(--muted);
+        font-size: 0.92rem;
+        line-height: 1.5;
+    }
+
+    .info-card {
+        min-height: 122px;
+        padding: 1rem 1.1rem;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--card);
+        box-shadow: 0 2px 8px rgba(41, 37, 36, 0.05);
+    }
+
+    .info-label {
+        margin-bottom: 0.8rem;
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .info-value {
+        color: var(--text);
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+    }
+
+    .chip {
+        display: inline-block;
+        margin: 0.15rem 0.25rem 0.15rem 0;
+        padding: 0.25rem 0.6rem;
+        border: 1px solid #DDD6FE;
+        border-radius: 999px;
+        background: var(--purple-soft);
+        color: var(--purple-text);
+        font-size: 0.78rem;
+        font-weight: 600;
+    }
+
+    .owner-control-card {
+        margin: 1rem 0 0;
+        padding: 1rem 1.1rem;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--card);
+        box-shadow: 0 2px 8px rgba(41, 37, 36, 0.05);
+    }
+
+    .owner-control-card h3 {
+        margin: 0 0 0.4rem;
+        color: var(--text);
+        font-size: 1rem;
+    }
+
+    .status-badge {
+        display: inline-block;
+        margin: 0.15rem 0 0.55rem;
+        padding: 0.3rem 0.65rem;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 700;
+    }
+
+    .status-active {
+        border: 1px solid #BBF7D0;
+        background: var(--green-soft);
+        color: #166534;
+    }
+
+    .status-paused {
+        border: 1px solid #FDE68A;
+        background: var(--amber-soft);
+        color: var(--amber);
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        min-height: 430px;
+        border-radius: 16px;
+        background: var(--card);
+        border-color: var(--border);
+        box-shadow: 0 2px 10px rgba(41, 37, 36, 0.06);
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stImage"] {
+        width: 100%;
+        height: 155px;
+        overflow: hidden;
+        border-radius: 11px;
+        background: #F5F5F4;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stImage"] img {
+        display: block;
+        width: 100%;
+        height: 155px;
+        object-fit: cover;
+        border-radius: 11px;
+    }
+
+    .product-name {
+        min-height: 46px;
+        margin: 0.8rem 0 0.15rem;
+        color: var(--text);
+        font-size: 1rem;
+        font-weight: 700;
+        line-height: 1.4;
+    }
+
+    .product-meta {
+        min-height: 20px;
+        color: var(--muted);
+        font-size: 0.76rem;
+    }
+
+    .category-badge,
+    .stock-badge,
+    .mode-badge,
+    .confidence-badge {
+        display: inline-block;
+        margin: 0.55rem 0.2rem 0 0;
+        padding: 0.24rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.73rem;
+        font-weight: 600;
+    }
+
+    .category-badge {
+        border: 1px solid #DDD6FE;
+        background: var(--purple-soft);
+        color: var(--purple-text);
+    }
+
+    .stock-available {
+        border: 1px solid #BBF7D0;
+        background: var(--green-soft);
+        color: #166534;
+    }
+
+    .stock-unavailable {
+        border: 1px solid #FECACA;
+        background: var(--red-soft);
+        color: #991B1B;
+    }
+
+    .mode-badge {
+        border: 1px solid #E7E5E4;
+        background: #F5F5F4;
+        color: #57534E;
+    }
+
+    .confidence-high {
+        border: 1px solid #BBF7D0;
+        background: var(--green-soft);
+        color: #166534;
+    }
+
+    .confidence-medium {
+        border: 1px solid #FDE68A;
+        background: var(--amber-soft);
+        color: var(--amber);
+    }
+
+    .confidence-low {
+        border: 1px solid #FECACA;
+        background: var(--red-soft);
+        color: #991B1B;
+    }
+
+    .product-description {
+        min-height: 42px;
+        margin: 0.7rem 0;
+        color: #57534E;
+        font-size: 0.83rem;
+        line-height: 1.45;
+    }
+
+    .product-price {
+        margin: 0.5rem 0 0.8rem;
+        color: #1E3A8A;
+        font-size: 1.2rem;
+        font-weight: 700;
+    }
+
+    .reference-note {
+        margin-top: 0.35rem;
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-align: center;
+    }
+
+    .proposal-card,
+    .trace-card {
+        margin: 0.85rem 0;
+        padding: 1.1rem;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--card);
+        box-shadow: 0 2px 8px rgba(41, 37, 36, 0.05);
+    }
+
+    .proposal-card h3,
+    .trace-card h3 {
+        margin: 0 0 0.65rem;
+        color: var(--text);
+        font-size: 1rem;
+    }
+
+    .confidence-track {
+        width: 100%;
+        height: 8px;
+        margin-top: 0.65rem;
+        border-radius: 999px;
+        overflow: hidden;
+        background: #E7E5E4;
+    }
+
+    .confidence-fill {
+        height: 100%;
+        border-radius: 999px;
+    }
+
+    .confidence-fill.high {
+        background: #16A34A;
+    }
+
+    .confidence-fill.medium {
+        background: #D97706;
+    }
+
+    .confidence-fill.low {
+        background: #DC2626;
+    }
+
+    @media (max-width: 640px) {
+        .block-container {
+            padding: 1rem 0.8rem 2rem;
+        }
+
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            min-height: auto;
+        }
+
+        button[data-baseweb="tab"] {
+            padding: 0 0.7rem;
+            font-size: 0.84rem;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def backend_get(path: str):
+    try:
+        response = requests.get(f"{BASE_URL}{path}", timeout=TIMEOUT_SECONDS)
+        response.raise_for_status()
+        return response.json(), None
+    except (ConnectionError, Timeout):
+        return None, "unreachable"
+    except requests.HTTPError as error:
+        return None, f"HTTP error: {error.response.status_code}"
+    except Exception as error:
+        return None, f"Unexpected error: {error}"
+
+
+def backend_post(
+    path: str,
+    json_body: dict | None = None,
+    headers: dict | None = None,
+):
+    try:
+        response = requests.post(
+            f"{BASE_URL}{path}",
+            json=json_body,
+            headers=headers,
+            timeout=TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.json(), None
+    except (ConnectionError, Timeout):
+        return None, "unreachable"
+    except requests.HTTPError as error:
+        try:
+            return error.response.json(), f"http_error_{error.response.status_code}"
+        except Exception:
+            return None, f"http_error_{error.response.status_code}"
+    except Exception as error:
+        return None, f"Unexpected error: {error}"
+
+
+def show_backend_unreachable():
+    st.error(
+        f"Backend not reachable at `{BASE_URL}`. "
+        "Start the API with `uvicorn main:app --reload`, then refresh the page."
+    )
+
+
+def find_alternatives(
+    catalog: list,
+    mandate: dict,
+    exclude_item_id: str,
+    max_suggestions: int = 2,
+) -> list:
+    if not catalog or not mandate:
+        return []
+
+    candidates = [
+        item
+        for item in catalog
+        if item["item_id"] != exclude_item_id
+        and item.get("in_stock", True)
+        and item["category"] in mandate["allowed_categories"]
+        and item["price"] <= mandate["spending_cap"]
+    ]
+    return sorted(candidates, key=lambda item: item["price"])[:max_suggestions]
+
+
+def load_product_image(image_path: str, width: int = 600, height: int = 360):
+    try:
+        path = Path(image_path)
+
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+
+        if not path.exists() or not path.is_file():
+            return None
+
+        image = Image.open(path).convert("RGB")
+        return ImageOps.fit(
+            image,
+            (width, height),
+            method=Image.Resampling.LANCZOS,
+            centering=(0.5, 0.5),
+        )
+    except Exception:
+        return None
+
+
+def confidence_style(confidence: float) -> str:
+    if confidence >= 0.8:
+        return "high"
+    if confidence >= 0.5:
+        return "medium"
+    return "low"
+
+
+def render_section(title: str, copy: str = ""):
+    st.markdown(
+        f'<div class="section-title">{escape(title)}</div>',
+        unsafe_allow_html=True,
+    )
+    if copy:
+        st.markdown(
+            f'<div class="section-copy">{escape(copy)}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def unpack_order_response(result: dict) -> tuple[dict | None, bool]:
+    if not isinstance(result, dict):
+        return None, False
+
+    if isinstance(result.get("order"), dict):
+        return result["order"], bool(result.get("idempotent_replay", False))
+
+    if result.get("id"):
+        return result, False
+
+    return None, False
+
+
+def render_order(order: dict, idempotent_replay: bool = False):
+    if idempotent_replay:
+        st.info("This request was already processed. Showing the original order.")
+
+    st.success("Order created successfully.")
+    left, right = st.columns(2)
+    left.metric("Order ID", order.get("id", "—"))
+    right.metric("Amount", f"₹{order.get('amount', 0) / 100:,.2f}")
+
+    with st.expander("Order response"):
+        st.json(order)
+
+    if order.get("note", "").startswith("MOCK ORDER"):
+        st.caption("Mock order: Razorpay test keys are not configured.")
+    else:
+        st.caption("Razorpay test-mode order. No real money is charged.")
+
+
+def render_owner_control(mandate: dict):
+    status = mandate.get("status", "active")
+    status_label = "Active" if status == "active" else "Paused"
+    status_class = "status-active" if status == "active" else "status-paused"
+    version = mandate.get("mandate_version", 1)
+
+    st.markdown(
+        f"""
+        <div class="owner-control-card">
+            <h3>Agent purchasing status</h3>
+            <span class="status-badge {status_class}">{status_label}</span>
+            <div class="section-copy">
+                Only the mandate owner can pause or resume agent purchasing.
+                The AI cannot modify its own permissions.
+            </div>
+            <div class="section-copy" style="margin-top: 0.5rem;">
+                <strong>Policy version:</strong> v{version}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    owner_password = st.text_input(
+        "Confirm your password",
+        type="password",
+        key="mandate_owner_password",
+        help="Required only to pause or resume purchasing.",
+    )
+
+    if status == "active":
+        button_label = "Pause agent purchasing"
+        endpoint = "/mandate/pause"
+        success_message = "Agent purchasing paused successfully."
+    else:
+        button_label = "Resume agent purchasing"
+        endpoint = "/mandate/resume"
+        success_message = "Agent purchasing resumed successfully."
+
+    if st.button(button_label, key="mandate_status_button"):
+        if not owner_password:
+            st.warning("Enter your password to confirm this mandate change.")
+            return
+
+        result, error = backend_post(
+            endpoint,
+            json_body={"owner_password": owner_password},
+        )
+
+        if error == "unreachable":
+            show_backend_unreachable()
+            return
+
+        if error and error.startswith("http_error"):
+            message = (
+                result.get("detail", "The mandate could not be changed.")
+                if result
+                else "The mandate could not be changed."
+            )
+            st.error(message)
+            return
+
+        if error:
+            st.warning(f"Could not update mandate status: {error}")
+            return
+
+        st.success(result.get("message", success_message))
+        st.rerun()
+
+
+def render_decision_receipt(plan: dict, mandate: dict):
+    """Render a downloadable decision receipt after policy evaluation."""
+    if plan.get("requested_item_id") is None or plan.get("item") is None:
+        return
+
+    item = plan["item"]
+    decision = plan.get("decision", "block")
+    reason = plan.get("reason", "No reason provided")
+    explanation = plan.get("explanation", "")
+
+    receipt_data = {
+        "timestamp": utcnow().isoformat(),
+        "item_id": item["item_id"],
+        "item_name": item["name"],
+        "price": item["price"],
+        "category": item["category"],
+        "decision": decision.upper(),
+        "policy_reason": reason,
+        "explanation": explanation,
+        "mandate_version": mandate.get("mandate_version", 1),
+        "mandate_status": mandate.get("status", "active"),
+        "spending_cap": mandate.get("spending_cap", 0),
+        "allowed_categories": mandate.get("allowed_categories", []),
+    }
+
+    receipt_json = json.dumps(receipt_data, indent=2, default=str)
+
+    st.download_button(
+        label="Download decision receipt",
+        data=receipt_json,
+        file_name=f"decision_receipt_{item['item_id']}_{utcnow().strftime('%Y%m%d_%H%M%S')}.json",
+        mime="application/json",
+        width='stretch',
+    )
+
+
+st.markdown(
+    """
+    <div class="page-hero">
+        <h1>Bounded Agent Checkout</h1>
+        <p>Safe agentic commerce with a trusted catalog, explicit spending rules, and an auditable decision trail.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+tab_mandate, tab_agent, tab_trace, tab_metrics, tab_audit = st.tabs(
+    ["Catalog", "Agent demo", "Agent trace", "Metrics", "Audit trail"]
+)
+
+
+with tab_mandate:
+    render_section(
+        "Current mandate",
+        "The agent can propose products, but the backend authorizes only purchases within these rules.",
+    )
+
+    mandate, mandate_error = backend_get("/mandate")
+
+    if mandate_error == "unreachable":
+        show_backend_unreachable()
+    elif mandate_error:
+        st.warning(f"Could not load mandate: {mandate_error}")
+    else:
+        cap_column, category_column, expiry_column = st.columns(3)
+
+        with cap_column:
+            st.metric("Spending cap", f"₹{mandate['spending_cap']:,.2f}")
+
+        with category_column:
+            categories = "".join(
+                f'<span class="chip">{escape(category.title())}</span>'
+                for category in mandate["allowed_categories"]
+            )
+            st.markdown(
+                f"""
+                <div class="info-card">
+                    <div class="info-label">Allowed categories</div>
+                    <div class="info-value">{categories}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with expiry_column:
+            expiry_display = mandate["expiry"].replace("T", " · ").split(".")[0]
+            st.markdown(
+                f"""
+                <div class="info-card">
+                    <div class="info-label">Mandate expires</div>
+                    <div class="info-value">{escape(expiry_display)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        render_owner_control(mandate)
+
+    render_section(
+        "Demo merchant catalog",
+        "Fixed catalog data makes every decision reproducible. External reference links are informational only.",
+    )
+
+    catalog, catalog_error = backend_get("/catalog")
+
+    if catalog_error == "unreachable":
+        show_backend_unreachable()
+    elif catalog_error:
+        st.warning(f"Could not load catalog: {catalog_error}")
+    elif not catalog:
+        st.info("Catalog is empty.")
+    else:
+        for start_index in range(0, len(catalog), 3):
+            columns = st.columns(3)
+
+            for column, item in zip(columns, catalog[start_index:start_index + 3]):
+                with column:
+                    image_path = item.get("image_url")
+                    product_image = (
+                        load_product_image(image_path) if image_path else None
+                    )
+
+                    name = escape(item["name"])
+                    category = escape(item["category"].replace("_", " ").title())
+                    merchant = escape(item.get("merchant_name", "Bounded Demo Store"))
+                    item_id = escape(item["item_id"])
+                    description = escape(
+                        item.get("description", "No description available.")
+                    )
+                    stock_class = (
+                        "stock-available"
+                        if item.get("in_stock", True)
+                        else "stock-unavailable"
+                    )
+                    stock_label = (
+                        "In stock" if item.get("in_stock", True) else "Out of stock"
+                    )
+
+                    with st.container(border=True):
+                        if product_image is not None:
+                            st.image(
+                                product_image,
+                                width='stretch',
+                            )
+
+                        st.markdown(
+                            f'<div class="product-name">{name}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(
+                            f'<div class="product-meta">{merchant} · {item_id}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(
+                            f'<span class="category-badge">{category}</span>'
+                            f'<span class="stock-badge {stock_class}">{stock_label}</span>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(
+                            f'<div class="product-description">{description}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(
+                            f'<div class="product-price">₹{item["price"]:,.2f}</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                        if item.get("reference_url"):
+                            st.link_button(
+                                "View reference",
+                                item["reference_url"],
+                                width='stretch',
+                            )
+                            st.markdown(
+                                '<div class="reference-note">External reference only</div>',
+                                unsafe_allow_html=True,
+                            )
+
+
+with tab_agent:
+    render_section(
+        "Ask the agent",
+        "Describe what you need. The planner may suggest an item, but the mandate gate makes the final decision.",
+    )
+
+    catalog, catalog_error = backend_get("/catalog")
+    mandate, mandate_error = backend_get("/mandate")
+
+    if catalog_error == "unreachable" or mandate_error == "unreachable":
+        show_backend_unreachable()
+    elif catalog_error:
+        st.warning(f"Could not load catalog: {catalog_error}")
+    elif mandate_error:
+        st.warning(f"Could not load mandate: {mandate_error}")
+    elif not catalog:
+        st.info("Catalog is empty.")
+    else:
+        st.subheader("Describe your need")
+        nl_request = st.text_input(
+            "For example: I need something for work under ₹1000",
+            key="nl_request_input",
+            label_visibility="collapsed",
+            placeholder="I need something for work under ₹1000",
+        )
+
+        if st.button("Plan purchase", key="plan_purchase_button"):
+            if not nl_request.strip():
+                st.warning("Enter a request first.")
+            else:
+                plan_result, plan_error = backend_post(
+                    f"/agent/plan?request={quote(nl_request)}"
+                )
+
+                if plan_error == "unreachable":
+                    show_backend_unreachable()
+                elif plan_error and not plan_result:
+                    st.warning(f"Could not create a plan: {plan_error}")
+                elif plan_result:
+                    st.session_state["last_plan"] = plan_result
+                    st.session_state.pop("last_plan_order", None)
+
+        plan = st.session_state.get("last_plan")
+
+        if plan:
+            confidence = float(plan["confidence"])
+            style = confidence_style(confidence)
+
+            st.markdown(
+                f"""
+                <div class="proposal-card">
+                    <h3>Agent proposal</h3>
+                    <p><strong>Interpretation:</strong> {escape(plan["intent_summary"])}</p>
+                    <span class="mode-badge">{escape(plan["planner_mode"].replace("_", " "))}</span>
+                    <span class="confidence-badge confidence-{style}">Confidence {confidence:.0%}</span>
+                    <div class="confidence-track">
+                        <div class="confidence-fill {style}" style="width: {max(0, min(confidence * 100, 100))}%;"></div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            if plan["requested_item_id"] is None:
+                st.warning(
+                    "No confident catalog match was found. Try selecting an item directly."
+                )
+            else:
+                item = plan["item"]
+                st.markdown(
+                    f"**Proposed item:** {item['name']} — ₹{item['price']:,.2f} · "
+                    f"{item['category'].title()}"
+                )
+                st.caption("The planner proposes. The deterministic mandate gate authorizes.")
+
+                if plan["decision"] == "buy":
+                    st.success("Purchase is within the current mandate.")
+                    st.write(plan["explanation"])
+
+                    with st.expander("Policy reason"):
+                        st.code(plan["reason"])
+
+                    render_decision_receipt(plan, mandate)
+
+                    if st.button("Create test order", key="buy_from_plan"):
+                        idempotency_key = str(uuid.uuid4())
+                        order_result, order_error = backend_post(
+                            f"/order/create?item_id={plan['requested_item_id']}",
+                            headers={"Idempotency-Key": idempotency_key},
+                        )
+
+                        if order_error == "unreachable":
+                            show_backend_unreachable()
+                        elif order_error and order_error.startswith("http_error"):
+                            reason = (
+                                order_result.get("detail", "Order was blocked.")
+                                if order_result
+                                else "Order was blocked."
+                            )
+                            st.error(reason)
+                        elif order_error:
+                            st.warning(f"Could not create order: {order_error}")
+                        else:
+                            order, replay = unpack_order_response(order_result)
+                            if order is None:
+                                st.error("The backend returned an invalid order response.")
+                            else:
+                                st.session_state["last_plan_order"] = order
+                                st.session_state["last_plan_order_replay"] = replay
+
+                    last_plan_order = st.session_state.get("last_plan_order")
+                    if last_plan_order:
+                        render_order(
+                            last_plan_order,
+                            st.session_state.get("last_plan_order_replay", False),
+                        )
+
+                else:
+                    st.error("Purchase blocked by mandate.")
+                    st.write(plan["explanation"])
+
+                    with st.expander("Policy reason"):
+                        st.code(plan["reason"])
+
+                    render_decision_receipt(plan, mandate)
+
+                    alternatives = find_alternatives(
+                        catalog,
+                        mandate,
+                        exclude_item_id=plan["requested_item_id"],
+                    )
+
+                    if alternatives:
+                        st.markdown("**Alternatives within the mandate**")
+                        for alternative in alternatives:
+                            st.write(
+                                f"• {alternative['name']} — ₹{alternative['price']:,.2f} "
+                                f"· {alternative['category'].title()}"
+                            )
+
+        st.divider()
+        st.subheader("Evaluate a catalog item directly")
+
+        options = {
+            f"{item['name']} — ₹{item['price']:,.2f} · {item['category'].title()}": item[
+                "item_id"
+            ]
+            for item in catalog
+        }
+        selected_label = st.selectbox("Choose an item", list(options.keys()))
+        selected_item_id = options[selected_label]
+
+        if st.button("Evaluate item", key="evaluate_item"):
+            decision, decision_error = backend_post(
+                f"/agent/explain?item_id={selected_item_id}"
+            )
+
+            if decision_error == "unreachable":
+                show_backend_unreachable()
+            elif decision_error and not decision:
+                st.warning(f"Could not evaluate item: {decision_error}")
+            elif decision:
+                st.session_state["last_decision"] = decision
+                st.session_state["last_item_id"] = selected_item_id
+                st.session_state.pop("last_order", None)
+
+        decision = st.session_state.get("last_decision")
+
+        if decision and st.session_state.get("last_item_id") == selected_item_id:
+            if decision["decision"] == "buy":
+                st.success("Purchase is within the current mandate.")
+                st.write(decision["explanation"])
+
+                with st.expander("Policy reason"):
+                    st.code(decision["reason"])
+
+                if st.button("Create test order", key="buy_direct"):
+                    idempotency_key = str(uuid.uuid4())
+                    order_result, order_error = backend_post(
+                        f"/order/create?item_id={selected_item_id}",
+                        headers={"Idempotency-Key": idempotency_key},
+                    )
+
+                    if order_error == "unreachable":
+                        show_backend_unreachable()
+                    elif order_error and order_error.startswith("http_error"):
+                        reason = (
+                            order_result.get("detail", "Order was blocked.")
+                            if order_result
+                            else "Order was blocked."
+                        )
+                        st.error(reason)
+                    elif order_error:
+                        st.warning(f"Could not create order: {order_error}")
+                    else:
+                        order, replay = unpack_order_response(order_result)
+                        if order is None:
+                            st.error("The backend returned an invalid order response.")
+                        else:
+                            st.session_state["last_order"] = order
+                            st.session_state["last_order_replay"] = replay
+
+                last_order = st.session_state.get("last_order")
+                if last_order:
+                    render_order(
+                        last_order,
+                        st.session_state.get("last_order_replay", False),
+                    )
+
+            else:
+                st.error("Purchase blocked by mandate.")
+                st.write(decision["explanation"])
+
+                with st.expander("Policy reason"):
+                    st.code(decision["reason"])
+
+                alternatives = find_alternatives(
+                    catalog,
+                    mandate,
+                    exclude_item_id=selected_item_id,
+                )
+
+                if alternatives:
+                    st.markdown("**Alternatives within the mandate**")
+                    for alternative in alternatives:
+                        st.write(
+                            f"• {alternative['name']} — ₹{alternative['price']:,.2f} "
+                            f"· {alternative['category'].title()}"
+                        )
+
+
+with tab_trace:
+    render_section(
+        "Agent trace",
+        "A readable sequence of requests, proposals, policy decisions, and order outcomes.",
+    )
+
+    limit = st.number_input("Events to show", min_value=1, value=10, step=5)
+
+    if st.button("Refresh trace"):
+        st.session_state["trace_limit"] = int(limit)
+
+    trace_limit = st.session_state.get("trace_limit", int(limit))
+    trace, trace_error = backend_get(f"/agent/trace?limit={trace_limit}")
+
+    if trace_error == "unreachable":
+        show_backend_unreachable()
+    elif trace_error:
+        st.warning(f"Could not load trace: {trace_error}")
+    elif not trace:
+        st.info("No activity yet. Run a planner request or evaluate an item first.")
+    else:
+        for step in trace:
+            details = str(step.get("details", ""))
+            event_type = step.get("event_type", "")
+            is_block = event_type == "order_blocked" or "BLOCK" in details
+            is_success = event_type == "order_created" or "BUY" in details
+            accent = "#B91C1C" if is_block else "#15803D" if is_success else "#2563EB"
+
+            st.markdown(
+                f"""
+                <div class="trace-card" style="border-left: 4px solid {accent};">
+                    <h3>Step {escape(str(step.get("step", "—")))} · {escape(str(step.get("action", "Event")))}</h3>
+                    <p>{escape(details)}</p>
+                    <div class="product-meta">{escape(str(step.get("timestamp", "")))}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+with tab_metrics:
+    render_section(
+        "Metrics",
+        "All figures are synthetic engineering-validation results, not real-user, revenue, or conversion results.",
+    )
+
+    if st.button("Refresh metrics"):
+        st.rerun()
+
+    st.subheader("1. Runtime decisions")
+    runtime_metrics, runtime_error = backend_get("/metrics")
+
+    if runtime_error == "unreachable":
+        show_backend_unreachable()
+    elif runtime_error:
+        st.warning(f"Could not load runtime metrics: {runtime_error}")
+    elif runtime_metrics:
+        first_row = st.columns(3)
+        first_row[0].metric(
+            "Purchase attempts",
+            runtime_metrics["total_purchase_attempts"],
+        )
+        first_row[1].metric("Buy decisions", runtime_metrics["buy_count"])
+        first_row[2].metric("Block decisions", runtime_metrics["block_count"])
+
+        second_row = st.columns(3)
+        block_rate = runtime_metrics["block_rate_percent"]
+        latency = runtime_metrics["avg_gate_latency_ms"]
+
+        second_row[0].metric(
+            "Block rate",
+            f"{block_rate}%" if block_rate is not None else "No attempts yet",
+        )
+        second_row[1].metric(
+            "Average gate latency",
+            f"{latency} ms" if latency is not None else "Not available",
+        )
+        second_row[2].metric(
+            "Decision previews",
+            runtime_metrics["decision_preview_count"],
+        )
+        st.caption(runtime_metrics["methodology_note"])
+
+    st.divider()
+    st.subheader("2. Policy validation")
+    st.caption(
+        "Past decisions are independently re-checked against a separate policy implementation."
+    )
+
+    policy_metrics, policy_error = backend_get("/metrics/policy")
+
+    if policy_error == "unreachable":
+        show_backend_unreachable()
+    elif policy_error:
+        st.warning(f"Could not load policy metrics: {policy_error}")
+    elif policy_metrics:
+        policy_columns = st.columns(3)
+        policy_columns[0].metric(
+            "Decisions validated",
+            policy_metrics["total_validated"],
+        )
+        policy_columns[1].metric(
+            "Correct decisions",
+            policy_metrics["correct_decisions"],
+        )
+
+        policy_accuracy = policy_metrics["policy_accuracy_percent"]
+        policy_columns[2].metric(
+            "Policy accuracy",
+            f"{policy_accuracy}%" if policy_accuracy is not None else "No data yet",
+        )
+
+        if policy_metrics["mismatches"]:
+            st.error(f"{len(policy_metrics['mismatches'])} mismatch(es) found.")
+            st.json(policy_metrics["mismatches"])
+        else:
+            st.success("No mismatches found in validated decisions.")
+
+    st.divider()
+    st.subheader("3. Security validation")
+    st.caption("Counts deliberate adversarial test runs only, not ordinary planner misses.")
+
+    adversarial_metrics, adversarial_error = backend_get("/metrics/adversarial")
+
+    if adversarial_error == "unreachable":
+        show_backend_unreachable()
+    elif adversarial_error:
+        st.warning(f"Could not load adversarial metrics: {adversarial_error}")
+    elif adversarial_metrics:
+        if adversarial_metrics["total_attempts"] == 0:
+            st.info(
+                "No adversarial test run recorded yet. "
+                "Run `python run_adversarial_tests.py`."
+            )
+        else:
+            security_columns = st.columns(3)
+            security_columns[0].metric(
+                "Adversarial attempts",
+                adversarial_metrics["total_attempts"],
+            )
+            security_columns[1].metric(
+                "Blocked",
+                adversarial_metrics["blocked_count"],
+            )
+
+            attack_rate = adversarial_metrics["attack_success_rate_percent"]
+            security_columns[2].metric(
+                "Attack success rate",
+                f"{attack_rate}%" if attack_rate is not None else "—",
+            )
+
+            if adversarial_metrics["success_count"] > 0:
+                st.error(
+                    f"{adversarial_metrics['success_count']} "
+                    "adversarial attempt(s) succeeded."
+                )
+
+    st.divider()
+    st.subheader("4. Validation suite")
+    st.caption(
+        "Named test cases cover allowed purchases, blocks, planner safety, "
+        "adversarial input, and recovery."
+    )
+
+    validation_results, validation_error = backend_get("/validation/results")
+
+    if validation_error == "unreachable":
+        show_backend_unreachable()
+    elif validation_error:
+        st.warning(f"Could not load validation results: {validation_error}")
+    elif validation_results and not validation_results.get("available"):
+        st.info(validation_results.get("message", "No validation results yet."))
+    elif validation_results:
+        validation_columns = st.columns(3)
+        validation_columns[0].metric(
+            "Total cases",
+            validation_results["total_cases"],
+        )
+        validation_columns[1].metric("Passed", validation_results["passed"])
+        validation_columns[2].metric("Failed", validation_results["failed"])
+
+        st.caption(f"Last run: {validation_results['timestamp']}")
+
+        if validation_results["failed"] > 0:
+            st.error(f"{validation_results['failed']} case(s) are failing.")
+        else:
+            st.success("All named validation cases are passing.")
+
+        with st.expander("By category"):
+            for category, stats in validation_results["by_category"].items():
+                st.write(f"**{category}:** {stats['passed']}/{stats['total']} passed")
+
+        with st.expander(
+            "Case-by-case results",
+            expanded=validation_results["failed"] > 0,
+        ):
+            rows = [
+                {
+                    "ID": result["id"],
+                    "Name": result["name"],
+                    "Category": result["category"],
+                    "Status": result["status"],
+                    "Reason": result["reason"],
+                }
+                for result in validation_results["results"]
+            ]
+            st.dataframe(rows, width='stretch', hide_index=True)
+
+
+with tab_audit:
+    render_section(
+        "Audit trail",
+        "Every planner request, policy decision, and order action is recorded here.",
+    )
+
+    if st.button("Refresh audit trail"):
+        st.rerun()
+
+    audit_log, audit_error = backend_get("/audit")
+
+    if audit_error == "unreachable":
+        show_backend_unreachable()
+    elif audit_error:
+        st.warning(f"Could not load audit trail: {audit_error}")
+    elif not audit_log:
+        st.info("No audit events yet.")
+    else:
+        st.markdown(
+            """
+            <div class="section-copy">
+                Download the audit trail for external review.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        csv_buffer = io.StringIO()
+        writer = csv.DictWriter(
+            csv_buffer,
+            fieldnames=["timestamp", "event_type", "details"],
+        )
+        writer.writeheader()
+        for entry in audit_log:
+            writer.writerow({
+                "timestamp": entry["timestamp"],
+                "event_type": entry["event_type"],
+                "details": str(entry["details"]),
+            })
+
+        st.download_button(
+            label="Download audit log as CSV",
+            data=csv_buffer.getvalue(),
+            file_name=f"bounded_agent_audit_{utcnow().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            width='stretch',
+        )
+
+        json_buffer = io.StringIO()
+        json.dump(audit_log, json_buffer, indent=2, default=str)
+
+        st.download_button(
+            label="Download audit log as JSON",
+            data=json_buffer.getvalue(),
+            file_name=f"bounded_agent_audit_{utcnow().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json",
+            width='stretch',
+        )
+
+        st.divider()
+
+        audit_rows = [
+            {
+                "Timestamp": entry["timestamp"],
+                "Event type": entry["event_type"],
+                "Details": str(entry["details"]),
+            }
+            for entry in reversed(audit_log)
+        ]
+        st.dataframe(audit_rows, width='stretch', hide_index=True)

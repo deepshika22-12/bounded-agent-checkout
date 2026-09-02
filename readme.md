@@ -12,6 +12,7 @@ The project is built around one simple boundary:
 
 - [Open the live Streamlit demo](https://bounded-agent-checkout.streamlit.app/)
 - [Backend API documentation](https://bounded-agent-backend.onrender.com/)
+- [Watch the 5-minute pitch video](https://youtu.be/xxG7DF3-t3E)
 
 Demo note: This is a prototype using test-mode/mock checkout. Do not enter real payment or personal information.
 

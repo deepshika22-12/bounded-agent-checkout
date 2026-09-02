@@ -1,18 +1,3 @@
-"""
-policy_simulator.py
-
-Independently re-derives the expected buy/block decision for past audit
-events and compares it against what the system actually decided.
-
-WHY A SEPARATE IMPLEMENTATION MATTERS:
-If this just called main.py's agent_decide() again, "policy accuracy" would
-be tautological -- of course the gate agrees with itself every time. The
-check only means something if the "expected" side is computed
-independently: same raw inputs (item price/category, mandate rules,
-timestamp), different code path. A mismatch would reveal a real bug in
-one implementation or the other -- which is the entire point of validating.
-"""
-
 from datetime import datetime
 
 

@@ -1,16 +1,3 @@
-"""
-audit_store.py
-
-Makes the audit trail survive server restarts by backing it with a JSON file
-instead of a plain Python list living only in memory.
-
-Design is intentionally simple: the whole log is kept in memory (a list of
-dicts) AND mirrored to disk on every append. For a hackathon-scale audit
-trail (hundreds of entries, not millions) rewriting the full file on each
-append is simple, easy to reason about, and hard to get subtly wrong --
-which matters more here than raw performance.
-"""
-
 import json
 from datetime import datetime
 from pathlib import Path

@@ -1,19 +1,3 @@
-"""
-agent_trace.py
-
-Turns raw audit_store entries into a friendly step-by-step trace for display,
-e.g.: User request -> Planner proposal -> Mandate gate -> Razorpay order.
-
-DESIGN NOTE (why this doesn't filter by order_id):
-A blocked purchase never creates an order, so there's no order_id to key a
-trace on for the single most important demo case -- the mandate gate
-stopping an out-of-policy purchase. Our audit events also don't carry a
-shared transaction/session id linking a request to its eventual outcome.
-Rather than fake that correlation with a fragile timestamp-matching hack,
-this module just formats the most recent N raw events (in order) into
-readable steps. Simple, and it works identically for buy and block outcomes.
-"""
-
 from datetime import datetime
 
 

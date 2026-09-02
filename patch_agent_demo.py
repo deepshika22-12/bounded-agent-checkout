@@ -1,15 +1,3 @@
-"""
-Fixes the false "Backend not reachable" error in the Agent demo tab.
-
-Root cause: frontend/app.py used one global TIMEOUT_SECONDS = 5 for every
-request, including POST /agent/plan, which waits on the local Ollama model.
-Ollama's cold start alone takes 5-30 seconds, so that request timed out, and
-backend_post reported Timeout and ConnectionError with the same label.
-
-Run once from D:\\bounded_agent_checkout:
-    python patch_agent_demo.py
-"""
-
 import sys
 from pathlib import Path
 

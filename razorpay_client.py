@@ -1,17 +1,3 @@
-"""
-razorpay_client.py
-
-Thin wrapper around Razorpay's REST API, restricted to test mode.
-
-We use `requests` directly instead of the official SDK so the HTTP calls
-stay visible and easy to explain in a pitch/demo -- there's no hidden magic
-happening inside a library.
-
-Razorpay's Orders API doc: https://razorpay.com/docs/api/orders/
-Auth: HTTP Basic Auth using (key_id, key_secret) -- same pattern for test
-and live mode. Which environment you hit depends only on which keys you use.
-"""
-
 import requests
 
 from config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_BASE_URL, RAZORPAY_CONFIGURED

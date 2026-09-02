@@ -1,18 +1,3 @@
-"""
-LLM-first shopping planner with a deterministic fallback.
-
-Contract required by main.py -- do not change the keys or the exact
-planner_mode strings, they are validated by a Pydantic Literal:
-
-    {
-        "requested_item_id": str | None,
-        "intent_summary": str,
-        "selection_reason": str,
-        "planner_mode": "ollama" | "rule_based_fallback",
-        "confidence": float,
-    }
-"""
-
 import json
 import os
 import re

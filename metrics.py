@@ -1,26 +1,3 @@
-"""
-metrics.py
-
-Measured RUNTIME metrics only. Independent policy validation lives in
-policy_simulator.py, and adversarial-test results live in adversarial_tests.py
--- kept separate on purpose, since "the gate ran fast," "the gate is
-provably correct," and "the system resists attack" are three different
-claims that deserve three different, clearly-labeled numbers.
-
-METHODOLOGY NOTE -- read before trusting these numbers:
-buy_count / block_count / block_rate_percent are computed ONLY from
-`order_created` and `order_blocked` audit events -- i.e. actual purchase
-ATTEMPTS, not every time the gate was consulted. This is deliberate: the
-mandate gate is re-checked server-side on every purchase (by design -- see
-main.py's /order/create and /agent/plan), so a single logical transaction
-can generate the SAME decision multiple times in the audit log (once as a
-preview, once again inside the re-check). Counting every "buy"/"block"
-string across all event types would silently inflate these numbers by
-2-3x depending on which endpoints were used to get there. order_created
-and order_blocked are each logged exactly once per /order/create call --
-they're the only events safe to count directly for this purpose.
-"""
-
 DECISION_PREVIEW_EVENT_TYPES = ("agent_decision", "policy_decision", "agent_explanation")
 
 

@@ -1,14 +1,3 @@
-"""
-Starts the Bounded Agent Checkout backend and frontend together.
-
-- frees ports 8000 and 8501 first, so a stale process cannot cause
-  "Only one usage of each socket address"
-- waits for GET /health before launching Streamlit
-- preloads the Ollama model with keep_alive so the first planner
-  request in the UI does not pay the cold-start cost
-- shuts both processes down on Ctrl+C
-"""
-
 import json
 import os
 import subprocess
